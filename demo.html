@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CommandIQ demo</title>
+<style>body{font:16px system-ui;max-width:760px;margin:3rem auto;padding:0 1rem;color:#172033}button{padding:.6rem 1rem}pre{white-space:pre-wrap;background:#f2f4f7;padding:1rem;border-radius:8px}</style>
+<h1>CommandIQ</h1><p>Choose a fixture or text file. Inspection runs locally in this browser tab.</p>
+<input id="file" type="file"><button id="scan">Inspect file</button><pre id="result">No scan yet.</pre>
+<script type="module">
+import { createUploadSecurityCore } from "./dist/core/security-core.js";
+const core = createUploadSecurityCore({scanner:{pdfWorkerSrc:new URL('./dist/pdf.worker.mjs',location.href).href,pdfAssetBaseUrl:new URL('./dist/',location.href).href}}); const input=document.querySelector('#file'); const output=document.querySelector('#result');
+document.querySelector('#scan').addEventListener('click', async()=>{ if(!input.files?.[0]){output.textContent='Choose a file first.';return;} output.textContent=JSON.stringify(await core.inspect({file:input.files[0],source:'demo'}),null,2); });
+</script></html>

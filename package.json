@@ -1,0 +1,21 @@
+{
+  "name": "commandiq-upload-security",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CommandIQ local-first browser upload inspection prototype",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build-demo.mjs",
+    "build:extension": "node scripts/build-extension.mjs",
+    "diagnose:pdf": "node scripts/diagnose-pdf.mjs",
+    "dev": "node dev-server.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.5.438"
+  }
+}

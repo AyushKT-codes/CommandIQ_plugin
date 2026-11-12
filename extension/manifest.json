@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "CommandIQ (Preview)",
+  "version": "0.1.0",
+  "description": "CommandIQ locally inspects selected browser uploads and blocks results that need review.",
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_start" },
+    { "matches": ["<all_urls>"], "js": ["main-world.js"], "run_at": "document_start", "world": "MAIN" }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["pdf.worker.mjs", "cmaps/*", "standard_fonts/*", "wasm/*"], "matches": ["<all_urls>"] }
+  ]
+}
