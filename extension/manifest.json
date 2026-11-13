@@ -3,6 +3,10 @@
   "name": "CommandIQ (Preview)",
   "version": "0.1.0",
   "description": "CommandIQ locally inspects selected browser uploads and blocks results that need review.",
+  "minimum_chrome_version": "116",
+  "permissions": ["offscreen"],
+  "background": { "service_worker": "connector-service-worker.js" },
+  "externally_connectable": { "ids": [] },
   "content_scripts": [
     { "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_start" },
     { "matches": ["<all_urls>"], "js": ["main-world.js"], "run_at": "document_start", "world": "MAIN" }

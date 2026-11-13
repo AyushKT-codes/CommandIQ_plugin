@@ -32,6 +32,15 @@ The current prompt-injection checks recognize a limited set of direct English ph
 
 For the extension build, `npm run build:extension` bundles the content scripts and copies the PDF.js worker and support assets into `dist/extension`. No web interface or local server is required to use the extension.
 
+To enable the cross-extension connector for a specific host extension, set its Chromium extension ID before building in PowerShell:
+
+```powershell
+$env:COMMANDIQ_HOST_EXTENSION_IDS = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+npm run build:extension
+```
+
+The default build has an empty external-extension allowlist. Connector details and the version 1 message protocol are in [docs/PROJECT.md](docs/PROJECT.md).
+
 ## Important limits
 
 This is a proof of concept, not a malware scanner. PDF support extracts selectable text; it does not OCR image-only pages or deeply analyze every PDF feature. Office, archive, image, and executable formats are not deeply parsed. Page-world fetch/XHR hooks are best-effort and do not guarantee coverage of workers, service workers, arbitrary streams, transformed uploads, or every website. No inspection backend is used. See [docs/PROJECT.md](docs/PROJECT.md) for architecture, scope, known limits, and roadmap.

@@ -24,9 +24,12 @@ flowchart LR
   USER[User selects, drops, pastes, or submits a file] --> PAGE[Website upload page]
   PAGE -->|Native multipart form| FORM[Isolated content script]
   PAGE -->|fetch or XHR with supported file body| HOOK[Main-world request hooks]
+  HOST[Allowlisted CommandIQ host extension] -->|runtime.connect: version 1 protocol| CONNECTOR[External connector in service worker]
   USER -. selection/drop/paste pre-scan .-> CACHE[Per-file scan promise cache]
   FORM --> SCANNER[Local TypeScript scanner]
   HOOK --> SCANNER
+  CONNECTOR --> OFFSCREEN[Hidden offscreen inspection document]
+  OFFSCREEN --> SCANNER
   CACHE --> SCANNER
   SCANNER --> IDENT[File identification and size limits]
   IDENT --> TEXT[Text rules: sensitive data, prompt injection, script indicators]
@@ -37,11 +40,14 @@ flowchart LR
   POLICY -->|ALLOW| CONTINUE[Continue supported upload]
   POLICY -->|BLOCK / REVIEW / error| STOP[Stop supported upload]
   STOP --> NOTICE[Generic in-page CommandIQ notice]
+  RESULT -->|structured result to host| HOST
 ```
 
 The content script and page-world hooks each call the same scanner implementation in their browser-required contexts. Files are read and parsed locally in the browser; there is no scanning server. A per-file cache avoids repeating scans when a pre-scan happens before an upload request.
 
 The request hooks currently inspect recognized file bodies (`File`, `Blob`, and `FormData` entries containing `File` objects). The native form path handles multipart forms. Other request-body shapes may pass without inspection, so this is best-effort coverage, not a browser-wide control.
+
+The cross-extension connector is implemented as a separate entry path: an allowlisted host extension streams file bytes through Chromium extension messaging to the service worker. The service worker relays the chunks to a hidden offscreen document, which reconstructs the file and calls the same scanner. The result returns to the host; the host remains responsible for pausing/continuing its own upload and showing its user experience.
 
 ### Planned CommandIQ architecture
 
@@ -57,13 +63,45 @@ flowchart LR
   CORR --> ENF[Enforcement controller]
   ENF --> HOST[CommandIQ host adapter]
   HOST --> UI[CommandIQ review and user experience]
-  CORE -. planned embedded path .-> PLACEHOLDER[Embedded integration placeholder: core facade exists; host connection planned]
+  CORE -. planned SDK and host adapter .-> PLACEHOLDER[Future host SDK and sample adapter; connector transport already exists]
   PLACEHOLDER -. planned .-> HOST
 ```
 
-The future target separates browser integration, the reusable inspection core, specialized analysis, policy, enforcement, and user experience. A supervisor can schedule format-specific agents under shared resource limits. This is the direction for the larger CommandIQ extension; the supervisor, agent runtime, richer policy service, and host adapter are not implemented today.
+The future target separates browser integration, the reusable inspection core, specialized analysis, policy, enforcement, and user experience. A supervisor can schedule format-specific agents under shared resource limits. This is the direction for the larger CommandIQ extension; the supervisor, agent runtime, richer policy service, and host product integration are not implemented today. The version 1 connector is a working transport boundary, not the complete host integration.
 
-The future design keeps the same core API boundary and adds specialized format agents, finding correlation, policy configuration, and a CommandIQ-owned review experience. `createUploadSecurityCore()` is the current starter facade; it is not yet an SDK or a live connection to a separate extension. See [Embedded integration placeholder](#embedded-integration-placeholder).
+The future design keeps the same core API boundary and adds specialized format agents, finding correlation, policy configuration, and a CommandIQ-owned review experience. `createUploadSecurityCore()` is the in-process facade. The opt-in runtime-messaging connector is the current cross-extension path, but a complete host adapter and review experience are still planned. See [Embedded integration placeholder](#embedded-integration-placeholder).
+
+### Cross-extension inspection connector (implemented, opt-in)
+
+This is **not an HTTP endpoint**. Chromium extensions communicate through `chrome.runtime.connect()` / `runtime.onConnectExternal`. The connector accepts requests only from caller extension IDs listed in the built manifest. The build defaults to an empty allowlist, so no other extension can connect until an administrator/developer explicitly supplies the host ID.
+
+To build with the host extension allowlisted in Windows PowerShell, replace the sample value with its 32-character Chromium extension ID:
+
+```powershell
+$env:COMMANDIQ_HOST_EXTENSION_IDS = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+npm run build:extension
+```
+
+For multiple approved host IDs, separate IDs with commas. The build validates the IDs and writes them to `dist/extension/manifest.json`. To disable external connections again, clear the variable and rebuild:
+
+```powershell
+Remove-Item Env:COMMANDIQ_HOST_EXTENSION_IDS -ErrorAction SilentlyContinue
+npm run build:extension
+```
+
+The host extension connects to the installed scanner extension ID using port name `commandiq-upload-inspection-v1`. It sends these version 1 messages in order:
+
+```json
+{ "version": 1, "type": "begin", "requestId": "req-123", "file": { "name": "report.pdf", "type": "application/pdf", "size": 12345 } }
+{ "version": 1, "type": "chunk", "requestId": "req-123", "sequence": 0, "dataBase64": "..." }
+{ "version": 1, "type": "finish", "requestId": "req-123" }
+```
+
+Chunks carry up to 128 KiB of raw file bytes each, encoded as base64. The host waits for an `ack` after `begin` and after each chunk, then receives either a `result` with the normal structured inspection result or an `error`. The connector enforces one active connector scan at a time and the scanner's 100 MiB per-file limit. Results contain the decision, redacted findings, and coverage notes; the original file bytes are never returned. The file moves between the two extensions locally on the same browser profile and is not sent to a CommandIQ server.
+
+The host must hold its upload until it receives the result. It should continue only on `ALLOW`; `BLOCK`, `REVIEW`, errors, a disconnected port, or a timeout should stop the host's pending upload. The scanner extension does not itself control the host extension's upload request or UI.
+
+The caller is authorized by Chromium's sender extension ID and the destination manifest allowlist. This does not yet provide enterprise policy distribution, admin configuration, audit/history, signed decisions, retries, or a sample host adapter. Use a stable host extension ID for release builds; an unpacked host extension may have a development ID that differs from its published ID. The extension requires Chrome 116 or later for its offscreen-document lifecycle support.
 
 ## End-to-end upload workflow
 
@@ -117,6 +155,8 @@ The planned product flow retains the same inspection core but adds a host-contro
 - The prompt-injection rules cover only a small set of direct English phrasing. They do not interpret meaning, and a file with no match is not guaranteed safe.
 - PDF.js extracts selectable text under the 100 MiB file ceiling, 250-page ceiling, and 10 MiB extracted-text ceiling. The scanner checks JavaScript actions, embedded attachments, interactive fields, and risky link/action annotations. Ordinary HTTP/HTTPS/mailto/tel links do not trigger review by themselves. Image-only pages, incomplete extraction, unsupported active features, or limit breaches return `REVIEW`.
 - Chromium Manifest V3 preview: an isolated content script intercepts multipart form submits; main-world wrappers inspect supported `fetch` and XHR bodies. It blocks non-`ALLOW` results and displays an in-page alert dialog.
+- Cross-extension connector: a Manifest V3 service worker accepts version 1 ports from manifest-allowlisted extension IDs; it relays bounded chunks to an offscreen document, which reconstructs and scans the file with the same scanner. The allowlist is empty unless `COMMANDIQ_HOST_EXTENSION_IDS` is set while building.
+- Offscreen inspection uses Chromium's `offscreen` API with the `WORKERS` reason so PDF.js can use its packaged worker without opening a visible UI.
 - PDF diagnostics print decision, extraction coverage, category, notes, and finding rule IDs without logging document text or matched values. `npm run diagnose:pdf` is a headless command-line diagnostic for synthetic samples.
 - `test/` includes clean and credential-like text fixtures, inert prompt-injection and suspicious-script-indicator samples, and synthetic PDFs for clean text, credential detection, a safe HTTPS link, and a risky JavaScript link. Regenerate PDFs with `node scripts/make-test-pdfs.mjs`.
 - No server-side scanning; contents are inspected in the browser.
@@ -126,14 +166,14 @@ The planned product flow retains the same inspection core but adds a host-contro
 - Agent supervisor, registry, scheduler, worker pool, investigation dependencies, cancellation, or recovery.
 - Deep parsers for Office formats, archives, email containers, images, media, or executable files; PDF OCR and deep embedded-object analysis.
 - Configurable policies, review/override workflow, upload history, or a settings interface.
-- Versioned public SDK, host-extension adapter, CommandIQ host sample, or cross-extension communication protocol.
+- Versioned public SDK, sample host-extension adapter/client, host upload lifecycle integration, connector integration checks, and enterprise administration controls.
 - Automated browser integration matrix, framework/provider compatibility suite, performance tests, and formal security review.
 
 ### Embedded integration placeholder
 
-`createUploadSecurityCore()` is a starter API boundary, not a connection to a separate extension. It currently offers `inspect()`, lifecycle event subscription, and `shutdown()`. A larger CommandIQ extension could bundle the core. There is no versioned SDK package, host adapter, cross-extension messaging protocol, cancellation API, or sample host extension.
+`createUploadSecurityCore()` is the in-process API boundary and currently offers `inspect()`, lifecycle event subscription, and `shutdown()`. In addition, the Chromium extension now has an opt-in external connector using the versioned `commandiq-upload-inspection-v1` runtime port described above. The host extension talks to this connector, which passes the reconstructed `File` to the local scanner. There is not yet a packaged SDK, complete sample host extension, enterprise management service, or result-history API.
 
-**Future use with CommandIQ:** package the core as a versioned SDK and bundle it into the CommandIQ extension. CommandIQ would pass selected/uploaded `File` objects to the core, receive inspection results/events, then apply its own policy and UI before allowing its upload flow to continue. Bundling shares the scanner without requiring a connection to another installed extension. The placeholder represents this planned boundary only.
+**Use with the larger CommandIQ extension:** the current integration option is to install both extensions, allowlist the host extension ID in the scanner build, and have the host pass a selected file through the version 1 runtime-messaging protocol. The host receives the inspection result and applies it to its own pending upload and UI. A later SDK could provide a simpler typed client around that protocol; it is not required for the current connector.
 
 ## Current limitations
 
@@ -142,6 +182,7 @@ The planned product flow retains the same inspection core but adds a host-contro
 - The code/network rule is a static indicator, not proof that a script is malicious. It can flag legitimate source files and does not execute code. More capable script analysis and format-specific active-content inspection are future work.
 - Identifying a file type does not mean it was scanned deeply or found safe.
 - Page `fetch`/XHR wrappers are best-effort. Worker contexts, custom streams, transformed bodies, replaced hooks, and non-HTTP paths may bypass them.
+- The external connector is opt-in and unavailable until a host ID is added at build time. It has not yet been exercised by a separate host extension; TypeScript and extension packaging are verified, but a host-to-scanner integration check remains outstanding. It allows one connector scan at a time and temporarily holds the file in browser memory during transfer and inspection.
 - Browser site matching is broad (`<all_urls>`); explain this permission model before distribution.
 - No supervisor, independent agents, archive expansion safeguards, configurable policy, review UI, or automated browser integration suite.
 - PDF tests cover only small synthetic files. They do not demonstrate compatibility with every PDF producer, encrypted/corrupt PDFs, image-only resumes, embedded files, complex AcroForms, or the PDF variants used by real enterprise applications.
@@ -168,7 +209,7 @@ These are product targets, not a claim of current parser support. Each family ne
 3. **Inspection agents:** format-aware text, metadata, structure, archives, static indicators, and prompt-injection indicators. Early partial: deterministic secret and prompt-injection rules plus bounded PDF text extraction exist; deep semantic analysis, Office/archive parsers, OCR, and other agents remain planned.
 4. **Correlation and policy:** deduplicate evidence and add configurable decisions. Basic decisions only.
 5. **Browser integration:** harden transactions and validate common frameworks/providers and bypasses. Narrow prototype only.
-6. **Experiences and SDK:** CommandIQ host review experience, versioned host SDK, and sample adapter. Not started.
+6. **Experiences and SDK:** CommandIQ host review experience, versioned host SDK, and sample adapter. Connector transport exists; host client and user experience remain not started.
 7. **Validation and release:** browser, security, performance, parser and permission validation. Not started.
 
 ## Run
