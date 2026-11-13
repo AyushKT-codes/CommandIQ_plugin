@@ -94,6 +94,16 @@ function scanText(text: string): SecurityFinding[] {
     ["private-key", "Private key material", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, "critical"],
     ["aws-access-key", "Cloud access key pattern", /\bAKIA[0-9A-Z]{16}\b/g, "high"],
     ["credential-assignment", "Credential-like assignment", /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*["']?[^\s"']{6,}/gi, "high"],
+    // Strong, direct prompt-injection language. These patterns target instructions
+    // that try to override the receiving AI's policy or expose its hidden prompt.
+    ["prompt-override", "Prompt-injection instruction override", /\b(?:ignore|disregard|forget|override|bypass)\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier|system|developer)\s+(?:instructions?|prompts?|rules?|messages?)\b/gi, "high"],
+    ["prompt-extraction", "Prompt-injection request to expose hidden instructions", /\b(?:reveal|print|show|repeat|disclose|output|return)\s+(?:your\s+)?(?:hidden\s+|full\s+|original\s+)?(?:system|developer|initial)\s+(?:prompt|instructions?|message)\b/gi, "high"],
+    ["prompt-secrecy", "Prompt-injection concealment instruction", /\b(?:do\s+not|don't|never)\s+(?:tell|inform|warn|show)\s+(?:the\s+)?(?:user|reader|recipient)\b.{0,100}\b(?:instruction|prompt|secret|hidden|above)\b/gi, "high"],
+    ["prompt-exfiltration", "Prompt-injection request to transmit sensitive data", /\b(?:send|email|upload|post|forward|transmit)\s+(?:all\s+)?(?:the\s+)?(?:stored\s+|available\s+|document\s+)?(?:credentials?|passwords?|api\s*keys?|secrets?|confidential\s+data|private\s+data)\b/gi, "high"],
+    // Static indicator only: paired dynamic-code and outbound-network APIs are
+    // suspicious, but legitimate developer files can contain the same APIs.
+    ["script-dynamic-network", "Suspicious dynamic-code and network combination", /\b(?:eval|Function|atob|fromCharCode)\b[\s\S]{0,300}\b(?:fetch|XMLHttpRequest|sendBeacon|WebSocket)\b|\b(?:fetch|XMLHttpRequest|sendBeacon|WebSocket)\b[\s\S]{0,300}\b(?:eval|Function|atob|fromCharCode)\b/gi, "medium"],
+    ["script-data-exfiltration", "Suspicious browser-data access and network combination", /\b(?:document\s*\.\s*cookie|localStorage|sessionStorage|navigator\s*\.\s*credentials)\b[\s\S]{0,300}\b(?:fetch|XMLHttpRequest|sendBeacon|WebSocket)\b|\b(?:fetch|XMLHttpRequest|sendBeacon|WebSocket)\b[\s\S]{0,300}\b(?:document\s*\.\s*cookie|localStorage|sessionStorage|navigator\s*\.\s*credentials)\b/gi, "medium"],
     ["email-address", "Email address", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "medium"],
   ];
   const out: SecurityFinding[] = [];

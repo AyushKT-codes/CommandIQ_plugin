@@ -1,0 +1,4 @@
+Synthetic static-analysis fixture. These are code-like indicators only; this file does not contain executable malware.
+
+document.cookie paired with fetch
+eval paired with XMLHttpRequest
